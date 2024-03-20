@@ -1,0 +1,434 @@
+---
+title: "Análisis de amplicones"
+author: "Jonny Zamudio"
+date: "2024-01-25"
+output: html_document
+---
+Análisis de diversidad
+
+
+Librerías necesarias
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r cars }
+library(phyloseq)
+library(tidyverse)
+library(vegan)
+```
+Importar datos
+
+```{r pressure, echo=TRUE, message=FALSE, warning=FALSE}
+datos <- import_biom("new_otu_table.biom","tree.nwk")
+```
+Categorizar las columnas en niveles de orden filogenético
+```{r message=FALSE, warning=FALSE}
+colnames(tax_table(datos)) <- c("Domain", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+```
+
+LIMPIEZA: Eliminar MITOCONDRIAS y CLOROPLASTOS. Buscarlos; ejemplo:
+
+```{r message=FALSE, warning=FALSE}
+datos_sin_euc <- subset_taxa(datos, Family != "Mitochondria")
+```
+
+NORMALIZACIÓN: Recortar todas las secuencias a la más pequeña (en mi caso, 42,000). Número para indicar muestreo aleatorio (1000):
+
+```{r message=FALSE, warning=FALSE}
+datos42k <- rarefy_even_depth(datos_sin_euc, 42000, 1000, FALSE)
+```
+
+VISUALIZAR DATOS:
+
+```{r message=FALSE, warning=FALSE}
+sample_sums(datos42k)
+```
+
+UNIR METADATOS AL ARCHIVO:
+
+```{r message=FALSE, warning=FALSE}
+datos42k <- merge_phyloseq(datos42k, import_qiime_sample_data("metadata.txt"))
+###CATEGORIZAR GRUPOS:
+sample_data(datos42k)[["Group"]] <- factor(sample_data(datos42k)[["Group"]], levels=c("SHAM_STD","SHAM_EE","TBI_STD","TBI_EE_COH","TBI_EE_SIN_COH"))
+```
+
+GRAFICAR (DIVIDIR POR FACTORES):
+
+```{r message=FALSE, warning=FALSE}
+plot_richness(datos42k)
+plot_richness(datos42k, measures=c ("Observed","Shannon"))
+###REALIZAR BOXPLOT DIVIDIDA EN FUNCIÓN DE LA LESIÓN:
+plot_richness(datos42k, x="injury", measures=c ("Observed","Shannon"))+geom_boxplot()
+###BOXPLOT EN FUNCIÓN DEL GRUPO:
+plot_richness(datos42k, x="Group", measures=c("Observed","Shannon"))+geom_boxplot()
+```
+
+CALCULAR ÍNDICES DE DIVERSIDAD:
+
+```{r message=FALSE, warning=FALSE}
+alfa_div <- estimate_richness(datos42k)
+```
+
+CÁLCULO DE DIVERSIDAD BETA (CON LAS DISTANCIAS WEIGHTED UNIFRAC):
+
+```{r message=FALSE, warning=FALSE}
+WUord <- ordinate(datos42k, "PCoA", "wunifrac")
+###UNWEIGHTED:
+UUord <- ordinate(datos42k, "PCoA", "uunifrac")
+```
+
+GRÁFICO DE PCOA (WEIGHTED):
+
+```{r message=FALSE, warning=FALSE}
+plot_ordination(datos42k, WUord, shape="housing", col="injury")+geom_label(aes(label=Group))
+#UNWEIGHTED:
+plot_ordination(datos42k, UUord, shape="housing", col="injury")+geom_label(aes(label=Group))
+```
+
+EDITAR LOS NOMBRES DE LAS FILAS A COLUMNAS PARA PODER UNIR LOS METADATOS:
+
+```{r message=FALSE, warning=FALSE}
+alfa_div <- rownames_to_column(alfa_div, "ID") %>% mutate(ID=gsub("\\.","-",ID))
+#LEER METADATOS:
+metadata <- read_tsv("metadata.txt")
+#CAMBIAR NOMBRES DE LAS MUESTRAS A ID (IGUAL QUE EN EL OTRO ARCHIVO):
+colnames(metadata)[1] <- "ID"
+#UNIR LOS METADATOS CON LA DIVERSIDAD ALFA (PARA PRUEBAS POSTERIORES):
+alfa_div <- left_join(alfa_div, metadata, by="ID")
+head(alfa_div)
+```
+
+COMPARACIONES MÚLTIPLES NO-PARAMÉTRICAS DE DIVERSIDAD ALFA (COMPARE MEANS, WILCOXON TEST):
+
+```{r message=FALSE, warning=FALSE}
+library(ggpubr)
+compare_means(Shannon~Group,alfa_div)
+compare_means(Observed~Group,alfa_div)
+```
+
+
+CALCULAR DISTANCIAS UNIFRAC PARA HACER PERMANOVAS (UNWEIGHTED Y WEIGHTED):
+
+```{r message=FALSE, warning=FALSE}
+UUdist <- distance(datos42k, "uunifrac")
+WUdist <- distance(datos42k, "wunifrac")
+```
+
+REALIZAR PERMANOVA MEDIANTE LA PRUEBA DE ADONIS USANDO INJURY COMO FACTOR:
+
+```{r message=FALSE, warning=FALSE}
+adonis2(UUdist ~ injury, data=data.frame(sample_data(datos42k)))
+```
+
+COMPARAR ÚNICAMENTE DOS GRUPOS (LOS DOS STD). EL FILTRO ES PARA EXCLUIR LOS DEMÁS DEL ANÁLISIS:
+
+```{r message=FALSE, warning=FALSE}
+datos_STD <- subset_samples(datos42k, Group=="SHAM_STD" | Group=="TBI_STD") %>% filter_taxa(function(x) sum(x) > 0, T)
+```
+
+ADONIS PAREADO DE LOS ANIMALES STD USANDO INJURY COMO FACTOR:
+
+```{r message=FALSE, warning=FALSE}
+###UNWEIGHTED
+adonis2(distance(datos_STD, "uunifrac") ~ injury, data = data.frame(sample_data(datos_STD)))
+###WEIGHTED
+adonis2(distance(datos_STD, "wunifrac") ~ injury, data = data.frame(sample_data(datos_STD)))
+###PUEDE CORRERSE LA PRUEBA POR DEFAULT O CAMBIAR LAS PERMUTACIONES (EJEMP.):
+adonis2(distance(datos_STD, "uunifrac") ~ injury, data = data.frame(sample_data(datos_STD)), permutations=9999)
+```
+
+ADONIS DE LOS DATOS COMPLETOS UTILIZANDO EL ALOJAMIENTO COMO FACTOR:
+
+```{r message=FALSE, warning=FALSE}
+###UNWEIGHTED
+adonis2(UUdist ~ housing, data=data.frame(sample_data(datos42k)))
+###WEIGHTED:
+adonis2(WUdist ~ housing, data=data.frame(sample_data(datos42k)))
+```
+
+UTILIZANDO EL FACTOR COHABITACIÓN:
+
+```{r message=FALSE, warning=FALSE}
+###UNWEIGHTED:
+adonis2(UUdist ~ cohabitation, data=data.frame(sample_data(datos42k)))
+###WEIGHTED:
+adonis2(WUdist ~ cohabitation, data=data.frame(sample_data(datos42k)))
+```
+
+ADONIS EN UN MODELO ANIDADO (UN FACTOR DEPENDE DEL OTRO Y EL EFECTO SE SUMA):
+
+```{r message=FALSE, warning=FALSE}
+adonis2(UUdist ~ injury/housing, data=data.frame(sample_data(datos42k)),perm=9999)
+###WEIGHTED:
+adonis2(WUdist ~ injury/housing, data=data.frame(sample_data(datos42k)),perm=9999)
+```
+
+ADONIS PAREADO: PARA NO TENER QUE CREAR SUBSET DE DATOS (POR PARES, COMO EL ANTERIOR TBI VS SHAM STD), ESTÁ LA FUNCIÓN:
+
+```{r message=TRUE, warning=TRUE}
+pwise.adonis.physeq <- function(x,factors,dist.m="wunifrac", perm=999,p.adjust.m ='bonferroni'){
+co <- combn(unique(as.character(sample_data(x)[,factors][[1]])),2)
+pairs <- c()
+F.Model <- c()
+R2 <- c()
+p.value <- c()
+for (elem in 1:ncol(co)){ 
+cosa<-c(co[1,elem],co[2,elem])
+filtered<-prune_samples(sample_names(x)[which( sample_data(x)[,factors][[1]] %in% cosa)],x)
+filtered<- filter_taxa(filtered, function(x) sum(x) > 0, TRUE)
+x1=distance(filtered,dist.m)
+form<-paste("x1","~",factors)
+ad = adonis(as.formula(form),as(sample_data(filtered),"data.frame"),perm=perm);
+#print(cosa)
+pairs = c(pairs,paste(co[1,elem],'vs',co[2,elem]));
+F.Model =c(F.Model,ad$aov.tab[1,4]);
+R2 = c(R2,ad$aov.tab[1,5]);
+p.value = c(p.value,ad$aov.tab[1,6])
+}
+p.adjusted = p.adjust(p.value,method=p.adjust.m)
+sig = c(rep('',length(p.adjusted)))
+sig[p.adjusted <= 0.05] <-'.'
+sig[p.adjusted <= 0.01] <-'*'
+sig[p.adjusted <= 0.001] <-'**'
+sig[p.adjusted <= 0.0001] <-'***'
+pairw.res = data.frame(pairs,F.Model,R2,p.value,p.adjusted,sig)
+print("Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1")
+return(pairw.res)
+}
+```
+
+EJEMPLO DE ADONIS PAREADO COMPARANDO ENTRE GRUPOS:
+
+```{r message=FALSE, warning=FALSE}
+###WEIGHTED:
+pwise.adonis.physeq(datos42k, "Group", dist.m="wunifrac", 999, "BH")
+###UNWEIGHTED:
+pwise.adonis.physeq(datos42k, "Group", dist.m="uunifrac", 999, "BH")
+```
+
+GUARDAR EN UN OBJETO EL RESULTADO DE LA PERMANOVA (EJEMP.):
+
+```{r message=FALSE, warning=FALSE}
+permanova_res <- pwise.adonis.physeq(datos42k, "Group", dist.m="uunifrac", 999, "BH")
+###EN UN TSV:
+write_tsv(permanova_res,file="permanova_pareado.tsv")
+saveRDS(pwise.adonis.physeq,file="permanova.rds")
+```
+
+TRANSFORMAR A ABUNDANCIA RELATIVA:
+
+```{r message=FALSE, warning=FALSE}
+datos_relative <- transform_sample_counts(datos42k, function(x) (x/sum(x))*100)
+```
+
+GRAFICAR EN DISTINTOS NIVELES DE ORGANIZACIÓN:
+
+```{r message=FALSE, warning=FALSE}
+#A NIVEL DE CLASE NO HAY NINGÚN PROBLEMA PORQUE LA CANTIDAD DE CLASES SIGUEN SIENDO VISUALIZABLES:
+plot_bar(datos_relative, fill="Class")
+#PARA AGRUPAR LOS MENOS ABUNDANTES Y HACERLOS VISUALIZABLES, SE UTILIZA LA HERRAMIENTA TAX_GLOM:
+tax_glom(datos_relative, "Class") %>% plot_bar( fill="Class")
+###PARA DARLES COLOR A LAS BARRAS, SE ESCOGE EL NÚMERO DE COLORES PARA RELLENAR Y EL PROGRAMA REALIZA UNA SELECCIÓN ALEATORIA CUANDO ADICIONAS LA PALETA A LA FUNCIÓN. EJEMP.:
+paleta <- sample(colors(), 50)
+tax_glom(datos_relative, "Class") %>% plot_bar( fill="Class")+scale_fill_manual(values=paleta)
+#ORDENAR POR GRUPOS:
+tax_glom(datos_relative, "Class") %>% plot_bar( fill="Class")+scale_fill_manual(values=paleta)+facet_grid(.~Group,scales="free", space="free")
+```
+
+AGLOMERAR/FILTRAR/RENOMBRAR LOS POCO ABUNDANTES:
+
+```{r message=FALSE, warning=FALSE}
+glom_others <- function(physeq, nivel, percent=1){
+###AGLOMERAR ASVS A NIVEL TAXONÓMICO:
+nombre <- tax_glom(physeq, taxrank=nivel)
+###FILTRAR LOS ASVS QUE TIENEN MÁXIMO DE ABUNDANCIA < 1%:
+cosa<-filter_taxa(nombre,function(x) max(x) < percent,TRUE)
+###AGLOMERANDO LOS POCO ABUNDANTES:
+nombre<-merge_taxa(nombre,taxa_names(cosa))
+###RENOMBRAR LOS POCO ABUNDANTES:
+tax_table(nombre)[is.na(tax_table(nombre))]<-"Others"
+return(nombre)
+}
+```
+
+APLICAR LA FUNCIÓN A GÉNERO (U OTRO NIVEL):
+
+```{r message=FALSE, warning=FALSE}
+plot_bar(glom_others(datos_relative,"Genus"), fill="Genus")+scale_fill_manual(values=paleta)+facet_grid(.~Group,scales="free", space="free")
+```
+
+MICROBIOME MARKER PARA REALIZAR ANÁLISIS DE ABUNDANCIA DIFERENCIAL CON LEFSE:
+
+```{r message=FALSE, warning=FALSE}
+library(microbiomeMarker)
+###CREAR UN NUEVO OBJETO:
+datos2lefse <- datos42k
+###CAMBIAR LA COLUMNA "DOMAIN" A "KINGDOM":
+colnames(tax_table(datos2lefse))[1] <- "Kingdom"
+###CORRER LEFSE:
+lefse_groups <- run_lefse(datos2lefse,"Group", taxa_rank="Genus")
+###COMPARACIONES UNA CONTRA UNO:
+lefse_multiple <- run_lefse(datos2lefse,"Group", taxa_rank="Genus", multigrp_strat = TRUE)
+###FUNCIÓN: COMPARAR CONTRA TODOS:
+pwise.run_lefse <- function(x,factors){
+co <- combn(unique(as.character(sample_data(x)[,factors][[1]])),2)
+res<-list()
+
+
+for (elem in 1:ncol(co)){ 
+cosa<-c(co[1,elem],co[2,elem])
+pairs = paste(co[1,elem],'vs',co[2,elem])
+filtered<-prune_samples(sample_names(x)[which( sample_data(x)[,factors][[1]] %in% cosa)],x)
+filtered<- filter_taxa(filtered, function(x) sum(x) > 0, TRUE)
+
+tem <- run_lefse(filtered, factors, taxa_rank = "Genus")
+
+res[[pairs]] <- tem
+
+}
+
+return(res)
+
+}
+###GRAFICAR TODOS:
+plot_ef_bar(lefse_groups)+theme(axis.text.y=element_text(face="italic"))
+###GRAFICAR COMPARACIÓN ENTRE GRUPOS. CON EL NÚMERO SE INDICA EL NOMBRE DE LA COMPARACIÓN:
+###CREAR OBJETO Y APLICAR FUNCIÓN:
+res_lefse_pareado <- pwise.run_lefse(datos2lefse, "Group")
+###GRAFICAR (EJEMPLO, SHAM+STD VS TBI+STD):
+plot_ef_bar(res_lefse_pareado[[2]])
+```
+
+Picrust: Predicción de rutas metabólicas.
+
+```{r}
+###Cargar la librería de Tidyverse:
+library(tidyverse)
+###Abrir el archivo tsv (descompreso):
+picrust <- read_tsv("path_abun_unstrat_descrip.tsv")
+###Mostrat las columnas para renombrarlas:
+colnames(picrust)
+###Son 30 muestras, pero las primeras 2 columnas no lo son:
+pathAbundance <- picrust[,3:32]
+###Agregar nombres a las filas mediante un data frame:
+pathAbundance <- data.frame(pathAbundance)
+rownames(pathAbundance) <- picrust$pathway
+pathAbundance
+head(pathAbundance)
+library(phyloseq)
+pathAbundance <- otu_table(pathAbundance, taxa_are_rows=TRUE)
+pathTax <- picrust[,2]
+pathTax <- data.frame(pathTax)
+rownames(pathTax) <- picrust$pathway
+###Sólo se puede leer este archivo si se indica que es una matriz (as.matrix):
+pathTax <- tax_table(as.matrix(pathTax))
+###Unir:
+picrust_physeq <- merge_phyloseq(pathAbundance, pathTax)
+###Cambiar símbolo de los nombres:
+sample_names(picrust_physeq) <- gsub("\\.", "-", sample_names(picrust_physeq))
+###Crear el objeto con las tres bases:
+picrust_physeq <- merge_phyloseq(picrust_physeq, import_qiime_sample_data("metadata.txt"))
+###Hacer subset de grupos de interés (eejmplo):
+picrust_tbi_ee <- subset_samples(picrust_physeq, Group == "TBI_STD"| Group == "TBI_EE_SIN_COH")
+###Función: Generar archivo para exportar a Galaxy:
+phyloseq2lefseGenus <- function (ps, covars, file.name = "lefse_data.txt", taxa.levels = c("Kingdom", 
+    "Phylum", "Class", "Order", "Family", "Genus"), transpose.otus = TRUE) 
+{
+    if (length(covars) > 2) {
+        warning("The length of the `covars` vector is greater than 2. File must be edited manually for use in LEfSe, which throws and error when there are more rows than specific classes, subclasses, and subjects.")
+    }
+    smpl.data <- sample.data.frame(ps)
+    smpl.data$Sample <- row.names(smpl.data)
+    t.smpl.data <- t(smpl.data)
+    t.smpl.data <- as.data.frame(t.smpl.data[c("Sample", covars), 
+        ])
+    if (transpose.otus) {
+        otu.tbl <- t(otu.matrix(ps))
+    }
+    else {
+        otu.tbl <- otu.matrix(ps)
+    }
+    tax.tbl <- taxa.matrix(ps)
+    tax.tbl <- as.matrix(tax.tbl[, taxa.levels])
+    uniq.lvls <- c()
+    for (i in c(1:length(tax.tbl[1, ]))) {
+        lvls <- as.data.frame(do.call(paste, c(as.data.frame(tax.tbl[, 
+            1:i]), sep = "|")))
+        names(lvls) <- "tax.lvl"
+        uniq.i <- as.character(unique(lvls$tax.lvl))
+        uniq.lvls <- c(uniq.lvls, uniq.i)
+    }
+    tax.tbl.join <- as.data.frame(do.call(paste, c(as.data.frame(tax.tbl), 
+        sep = "|")))
+    row.names(tax.tbl.join) <- row.names(tax.tbl)
+    names(tax.tbl.join) <- "tax.lvl"
+    uniq.tax.lvl.abunds <- data.frame(row.names = uniq.lvls)
+    for (smpl in names(t.smpl.data)) {
+        abunds <- as.data.frame(otu.tbl[row.names(otu.tbl), smpl])
+        total.abund <- sum(abunds[, 1])
+        smpl.tax.lvl.abunds <- cbind(abunds, tax.tbl.join)
+        smpl.uniq.lvl.abunds <- data.frame()
+        for (uniq.lvl in uniq.lvls) {
+            uniq.sub <- subset(smpl.tax.lvl.abunds, grepl(uniq.lvl, 
+                smpl.tax.lvl.abunds$tax.lvl, fixed = TRUE))
+            lvl.total <- as.factor(sum(uniq.sub[, 1])/total.abund)
+            uniq.lvl.smpl <- data.frame(row.names = uniq.lvl, 
+                sample = lvl.total)
+            names(uniq.lvl.smpl) <- smpl
+            smpl.uniq.lvl.abunds <- rbind(smpl.uniq.lvl.abunds, 
+                uniq.lvl.smpl)
+        }
+        uniq.tax.lvl.abunds <- cbind(uniq.tax.lvl.abunds, smpl.uniq.lvl.abunds)
+    }
+    final.data <- rbind(t.smpl.data, uniq.tax.lvl.abunds)
+    write.table(final.data, file = file.name, col.names = FALSE, 
+        sep = "\t", quote = FALSE)
+}
+```
+
+Agrupar en 7 columnas (por cada nivel taxonómico) y eliminar la columna "-description".
+
+```{r}
+###Crear las columnas haciéndolo "data_frame"
+###archivo$nombre (hacerlo 7 veces: Kingdom, Phylum, Order, Class, Family, Order, Species)
+```
+
+
+El doctor me envió el objeto ya arreglado, por lo que sólo es cuestión de integrarlo:
+
+```{r}
+###Leer el archivo recibido y guardarlo en un objeto que pueda usar:
+
+picrust7ranks <- readRDS("picrust7ranks.rsd")
+
+```
+
+Crear subsets de datos para hacer análisis pareados:
+
+```{r}
+###Ejemplo: Comparar TBI+STD vs TBI+EE Sin cohabitación:
+
+picrust7_tbi_ee <- subset_samples(picrust7ranks, Group == "TBI_STD" | Group == "TBI_EE_SIN_COH")
+
+###Correr las pruebas (lefse, aldex... ):
+
+lefse_tbi_ee <- run_lefse(picrust7_tbi_ee, "Group", taxa_rank = "Genus")
+
+###Graficar:
+
+plot_ef_bar(lefse_tbi_ee)
+
+###Hacer lo mismo con las demás comparaciones.
+###Para editar gráficas, abrir GGplot:
+
+library(ggplot2)
+
+###usar funciones de GGPlot:
+### ... + scale_fill_manual(values=NOMBRE_DE_LA_PALETA)+facet_wrap(.~Group, ###scale="free")+theme (seleccionar uno).
+###(... +scale_fill_manual(values=c("green","red"))
+###Ejemplo:
+
+plot_ef_bar(lefse_tbi_ee)+scale_fill_manual(values=c("red","navy"))+theme(axis.text = element_text(size=8, face="bold.italic",family = "arial"))
+```
+
