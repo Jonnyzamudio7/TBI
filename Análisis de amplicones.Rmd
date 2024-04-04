@@ -20,7 +20,7 @@ library(vegan)
 Importar datos
 
 ```{r pressure, echo=TRUE, message=FALSE, warning=FALSE}
-datos <- import_biom("new_otu_table.biom","tree.nwk")
+datos <- import_biom("Data/new_otu_table.biom","Data/tree.nwk")
 ```
 Categorizar las columnas en niveles de orden filogenético
 ```{r message=FALSE, warning=FALSE}
@@ -48,9 +48,39 @@ sample_sums(datos42k)
 UNIR METADATOS AL ARCHIVO:
 
 ```{r message=FALSE, warning=FALSE}
-datos42k <- merge_phyloseq(datos42k, import_qiime_sample_data("metadata.txt"))
+metadata <- read_csv("~/GIT/TBI/Data/variables_desenlace.csv")
+
+# Supongamos que 'metadata' es tu tibble y 'sample_id' es el nombre de la columna con los identificadores de muestra
+
+# Convertir tibble a dataframe clásico
+metadata_df <- as.data.frame(metadata)
+
+# Crear la nueva columna 'inflamacion' basada en la condición deseada
+# Usamos apply para aplicar la función a cada fila (MARGIN = 1)
+# Esto verifica si ALGUNO de los valores especificados en la fila es menor a 23
+metadata_df$inflamacion <- apply(metadata_df[,c("ratio_ca1_ipsi", "ratio_hilus_ipsi", "ratio_cortex_ipsi", 
+                                                "ratio_ca1_contra", "ratio_hilus_contra", "ratio_cortex_contra")], 1, function(x) {
+                                                  if(any(x < 23)) { 
+                                                    return(1) 
+                                                  } else { 
+                                                    return(0) 
+                                                  }
+                                                })
+# Crear la nueva columna 'injury' basada en los valores de la columna 'grupo'
+# Usamos grepl para identificar si los valores comienzan con "SHAM" o "TBI"
+metadata_df$injury <- ifelse(grepl("^SHAM", metadata_df$grupo), 0, 
+                             ifelse(grepl("^TBI", metadata_df$grupo), 1, NA))
+# Establecer los identificadores de muestra como nombres de filas en el dataframe clásico
+rownames(metadata_df) <- metadata_df$muestra
+
+# Ahora puedes remover la columna 'sample_id' ya que ya no se necesita, evitando la inclusión en el objeto sample_data
+#metadata_df <- metadata_df[, !(names(metadata_df) %in% c('muestra'))]
+
+# Convertir el dataframe a un objeto sample_data
+metadata_sample_data <- sample_data(metadata_df)
+datos42k <- merge_phyloseq(datos42k,metadata_sample_data)
 ###CATEGORIZAR GRUPOS:
-sample_data(datos42k)[["Group"]] <- factor(sample_data(datos42k)[["Group"]], levels=c("SHAM_STD","SHAM_EE","TBI_STD","TBI_EE_COH","TBI_EE_SIN_COH"))
+sample_data(datos42k)[["grupo"]] <- factor(sample_data(datos42k)[["grupo"]], levels=c("SHAM_STD","SHAM_EE","TBI_STD","TBI_EE_COH","TBI_EE_SIN_COH"))
 ```
 
 GRAFICAR (DIVIDIR POR FACTORES):
@@ -61,7 +91,7 @@ plot_richness(datos42k, measures=c ("Observed","Shannon"))
 ###REALIZAR BOXPLOT DIVIDIDA EN FUNCIÓN DE LA LESIÓN:
 plot_richness(datos42k, x="injury", measures=c ("Observed","Shannon"))+geom_boxplot()
 ###BOXPLOT EN FUNCIÓN DEL GRUPO:
-plot_richness(datos42k, x="Group", measures=c("Observed","Shannon"))+geom_boxplot()
+plot_richness(datos42k, x="grupo", measures=c("Observed","Shannon"))+geom_boxplot()
 ```
 
 CALCULAR ÍNDICES DE DIVERSIDAD:
@@ -78,12 +108,17 @@ WUord <- ordinate(datos42k, "PCoA", "wunifrac")
 UUord <- ordinate(datos42k, "PCoA", "uunifrac")
 ```
 
+```{r message=FALSE, warning=FALSE}
+meta_ord <- ordinate(physeq=datos42k, method = "NMDS", distance = "bray")
+plot_ordination(physeq = datos42k, ordination = meta_ord) +
+  geom_text(aes(label = muestra), vjust = 1.5, hjust = 0.5, size = 3)
+```
 GRÁFICO DE PCOA (WEIGHTED):
 
 ```{r message=FALSE, warning=FALSE}
-plot_ordination(datos42k, WUord, shape="housing", col="injury")+geom_label(aes(label=Group))
+plot_ordination(datos42k, WUord, shape="housing", col="injury")+geom_label(aes(label=grupo))
 #UNWEIGHTED:
-plot_ordination(datos42k, UUord, shape="housing", col="injury")+geom_label(aes(label=Group))
+plot_ordination(datos42k, UUord, shape="housing", col="injury")+geom_label(aes(label=grupo))
 ```
 
 EDITAR LOS NOMBRES DE LAS FILAS A COLUMNAS PARA PODER UNIR LOS METADATOS:
