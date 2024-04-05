@@ -1,0 +1,118 @@
+---
+title: "TBI_shaday"
+author: "SGuerrero"
+date: "2024-04-05"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r }
+library(phyloseq)
+library(tidyverse)
+library(vegan)
+library("DESeq2")
+```
+```{r pressure, echo=TRUE, message=FALSE, warning=FALSE}
+setwd("/home/shaday/GIT/TBI/Data/")
+datos <- import_biom("/home/shaday/GIT/TBI/Data/new_otu_table.biom","/home/shaday/GIT/TBI/Data/tree.nwk")
+colnames(datos@tax_table@.Data)<- c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+```
+
+```{r message=FALSE, warning=FALSE}
+metadata <- read_csv("~/GIT/TBI/Data/variables_desenlace.csv")
+
+# Supongamos que 'metadata' es tu tibble y 'sample_id' es el nombre de la columna con los identificadores de muestra
+
+# Convertir tibble a dataframe clásico
+metadata_df <- as.data.frame(metadata)
+
+# Crear la nueva columna 'inflamacion' basada en la condición deseada
+# Usamos apply para aplicar la función a cada fila (MARGIN = 1)
+# Esto verifica si ALGUNO de los valores especificados en la fila es menor a 23
+metadata_df$inflamacion <- apply(metadata_df[,c("ratio_ca1_ipsi", "ratio_hilus_ipsi", "ratio_cortex_ipsi", 
+                                                "ratio_ca1_contra", "ratio_hilus_contra", "ratio_cortex_contra")], 1, function(x) {
+                                                  if(any(x < 23)) { 
+                                                    return(1) 
+                                                  } else { 
+                                                    return(0) 
+                                                  }
+                                                })
+# Crear la nueva columna 'injury' basada en los valores de la columna 'grupo'
+# Usamos grepl para identificar si los valores comienzan con "SHAM" o "TBI"
+metadata_df$injury <- ifelse(grepl("^SHAM", metadata_df$grupo), 0, 
+                             ifelse(grepl("^TBI", metadata_df$grupo), 1, NA))
+# Establecer los identificadores de muestra como nombres de filas en el dataframe clásico
+rownames(metadata_df) <- metadata_df$muestra
+
+# Ahora puedes remover la columna 'sample_id' ya que ya no se necesita, evitando la inclusión en el objeto sample_data
+#metadata_df <- metadata_df[, !(names(metadata_df) %in% c('muestra'))]
+
+# Convertir el dataframe a un objeto sample_data
+metadata_sample_data <- sample_data(metadata_df)
+ps <- merge_phyloseq(datos,metadata_sample_data)
+
+```
+```{r}
+sample_data(ps)
+```
+```{r}
+ps.rarefied = rarefy_even_depth(ps, rngseed=1, sample.size=0.9*min(sample_sums(ps)), replace=F)
+ps.rarefied
+```
+```{r}
+sample_sums(ps.rarefied)
+```
+## Graficas de abundacias absolutas (luego de una rarefacion)
+```{r}
+plot_bar(ps.rarefied, fill="Phylum")
+```
+Separando por la variample inflamacion
+
+```{r}
+View(ps.rarefied@tax_table@.Data)
+```
+```{r}
+ plot_bar(ps.rarefied, fill="Phylum") + facet_wrap(~inflamacion, scales="free_x", nrow=1)
+```
+Sepando por la variable injury
+```{r}
+plot_bar(ps.rarefied, fill="Phylum") + facet_wrap(~injury, scales="free_x", nrow=1)
+```
+
+Otro nivel taxonomico
+```{r}
+ps.phylum = tax_glom(ps.rarefied, taxrank="Phylum", NArm=FALSE)
+ps.phylum
+```
+
+
+```{r}
+plot_bar(ps.phylum, fill="Phylum") + facet_wrap(~inflamacion, scales= "free_x", nrow=1)
+```
+## Alpha diversidad
+```{r}
+plot_richness(ps.rarefied, x="grupo", color="inflamacion", measures=c("Observed","Shannon"))
+plot_richness(ps.rarefied, x="grupo", measures=c("Observed","Shannon"))+geom_boxplot()
+```
+
+```{r}
+rich = estimate_richness(ps.rarefied)
+rich
+```
+```{r}
+pairwise.wilcox.test(rich$Observed, sample_data(ps.rarefied)$grupo)
+
+```
+## Beta diversidad
+```{r}
+ # PCoA plot using the unweighted UniFrac as distance
+wunifrac_dist = phyloseq::distance(ps.rarefied, method="unifrac", weighted=F)
+ordination = ordinate(ps.rarefied, method="PCoA", distance=wunifrac_dist)
+plot_ordination(ps.rarefied, ordination, color="inflamacion") + theme(aspect.ratio=1)
+```
+```{r}
+adonis(wunifrac_dist ~ sample_data(ps.rarefied)$inflamacion)
+```
+
