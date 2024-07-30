@@ -1,0 +1,615 @@
+---
+title: "Análisis de amplicones. Sin factor cohabitación (4 grupos)"
+author: "Jonny Zamudio"
+date: "2024-01-25"
+output: html_document
+---
+Análisis de diversidad
+
+
+Librerías necesarias
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r cars }
+library(phyloseq)
+library(tidyverse)
+library(vegan)
+```
+Importar datos
+
+```{r pressure, echo=TRUE, message=FALSE, warning=FALSE}
+datos <- import_biom("new_otu_table.biom","tree.nwk")
+```
+Categorizar las columnas en niveles de orden filogenético
+```{r message=FALSE, warning=FALSE}
+colnames(tax_table(datos)) <- c("Domain", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+```
+
+LIMPIEZA: Eliminar MITOCONDRIAS y CLOROPLASTOS. Buscarlos; ejemplo:
+
+```{r message=FALSE, warning=FALSE}
+datos_sin_euc <- subset_taxa(datos, Family != "Mitochondria")
+# Ver los nombres de las muestras actuales
+sample_names(datos_sin_euc)
+
+# Si quieres modificar estos nombres, puedes asignar un vector nuevo a sample_names(datos_sin_euc)
+# Por ejemplo, para cortar los nombres de las muestras a los primeros 5 caracteres
+nuevos_nombres <- substr(sample_names(datos_sin_euc), 5,10)
+
+# Asignar los nuevos nombres al objeto phyloseq
+sample_names(datos_sin_euc) <- nuevos_nombres
+
+# Verificar los cambios
+sample_names(datos_sin_euc)
+```
+UNIR METADATOS AL ARCHIVO:
+```{r message=FALSE, warning=FALSE}
+datos_sin_euc <- merge_phyloseq(datos_sin_euc, import_qiime_sample_data("metadata.txt"))
+###CATEGORIZAR GRUPOS:
+# Let's say you want to drop samples "Sample1" and "Sample2"
+samples_to_drop <- c("P-0025", "P-0026", "P-0027", "P-0028", "P-0029", "P-0030")
+# Drop the selected samples from the phyloseq object
+physeq_filtered <- subset_samples(datos_sin_euc, !X.SampleID %in% samples_to_drop)
+physeq_filtered
+sample_data(physeq_filtered)[["Group"]] <- factor(sample_data(physeq_filtered)[["Group"]], levels=c("SHAM+STD","SHAM+EE","TBI+STD","TBI+EE"))
+#Normalizar datos
+percentages <- transform_sample_counts(physeq_filtered, function(x) x*100 / sum(x))
+#Visualizar datos:
+sample_sums(percentages)
+```
+
+GRAFICAR ABUNDANCIAS ABSOLUTAS:
+
+```{r message=FALSE, warning=FALSE}
+#AGLOMERAR DE ACUERDO A LOS DIFERENTES NIVELES TAXONÓMICOS:
+glom_phylum <- tax_glom(physeq_filtered, taxrank = "Phylum")
+glom_class <- tax_glom(physeq_filtered, taxrank = "Class")
+glom_order <- tax_glom(physeq_filtered, taxrank = "Order")
+glom_family <- tax_glom(physeq_filtered, taxrank = "Family")
+glom_genus <- tax_glom(physeq_filtered, taxrank = "Genus")
+glom_species <- tax_glom(physeq_filtered, taxrank = "Species")
+
+absolute_df <- psmelt(glom_phylum)
+absolute_df_class <- psmelt(glom_class)
+absolute_df_order <- psmelt(glom_order)
+absolute_df_family <- psmelt(glom_family)
+absolute_genus <- psmelt(glom_genus)
+absolute_df_species <- psmelt(glom_species)
+library(grDevices)
+library(paletteer)
+#PHYLUM
+phylum_colors_abs <- paletteer_d("ggsci::springfield_simpsons")
+absolute_plot <- ggplot(data= absolute_df, aes(x=Sample, y=Abundance, fill=Phylum))+geom_bar(aes(), stat="identity", position="stack")+facet_grid(.~Group,scales="free", space="free")+theme_light(base_size = 12, base_family = "", base_line_size = 1)+scale_fill_manual(values = phylum_colors_abs)+geom_col(colour = "black", size = 0.25)+theme(axis.text.x = element_text(angle = 90))
+absolute_plot
+ggsave("absolute_plot.svg",plot = absolute_plot,dpi = 600, scale =1.5)
+#CLASS
+class_colors_abs <- paletteer_d("ggsci::default_ucscgb")
+absolute_class <- ggplot(data= absolute_df_class, aes(x=Sample, y=Abundance, fill=Class))+geom_bar(aes(), stat="identity", position="stack")+facet_grid(.~Group,scales="free", space="free")+theme_light(base_size = 12, base_family = "", base_line_size = 1)+scale_fill_manual(values = class_colors_abs)+geom_col(colour = "black", size = 0.25)+theme(axis.text.x = element_text(angle = 90))
+absolute_class
+ggsave("absolute_class.svg",plot = absolute_class,dpi = 600, scale =1.5)
+
+#FILTRAR LOS POCO ABUNDANTES:
+glom_others <- function(physeq, nivel, percent=99.8){
+#AGLOMERAR ASVS A NIVEL TAXONÓMICO:
+nombre <- tax_glom(physeq, taxrank=nivel)
+#FILTRAR LOS ASVS QUE TIENEN MÁXIMO DE ABUNDANCIA < 5%:
+cosa <- filter_taxa(nombre,function(x) max(x) < percent,TRUE)
+#AGLOMERANDO LOS POCO ABUNDANTES:
+nombre <- merge_taxa(nombre,taxa_names(cosa))
+#RENOMBRAR LOS POCO ABUNDANTES:
+tax_table(nombre)[is.na(tax_table(nombre))]<-"Others"
+return(nombre)
+}
+
+#ORDER
+order_colors_abs <- paletteer_d("ggsci::default_igv")
+absolute_order <- plot_bar(glom_others(physeq_filtered,"Order"), fill="Order") + scale_fill_manual(values = order_colors_abs) + facet_grid(.~Group,scales="free", space="free") + theme_light(base_size = 12, base_family = "", base_line_size = 1) + theme(axis.text.x = element_text(angle = 90))
+absolute_order
+ggsave("absolute_order.svg",plot = absolute_order,dpi = 600, scale =1.5)
+#Family
+family_colors_abs <- paletteer_d("ggsci::default_igv")
+absolute_family <- plot_bar(glom_others(physeq_filtered,"Family"), fill="Family") + scale_fill_manual(values = family_colors_abs) + facet_grid(.~Group,scales="free", space="free") + theme_light(base_size = 12, base_family = "", base_line_size = 1) + theme(axis.text.x = element_text(angle = 90))
+absolute_family
+ggsave("absolute_family.svg",plot = absolute_family,dpi = 600, scale =1.5)
+```
+
+GRAFICAR (DIVIDIR POR FACTORES):
+
+```{r message=FALSE, warning=FALSE}
+plot_richness(physeq_filtered)
+plot_richness(physeq_filtered, measures=c ("Observed","Shannon"))
+###REALIZAR BOXPLOT DIVIDIDA EN FUNCIÓN DE LA LESIÓN:
+plot_richness(physeq_filtered, x="injury", measures=c ("Observed","Shannon"))+geom_boxplot()
+###BOXPLOT EN FUNCIÓN DEL GRUPO:
+mis_colores_alpha <- c("white", "darkgreen", "darkred", "navy")
+richness_plot <- plot_richness(physeq_filtered, x="Group", measures=c("Simpson","Shannon")) + geom_boxplot(aes(fill = Group), color = "black", size = 0.5) + scale_fill_manual(values = mis_colores_alpha) + theme_light(base_size = 12, base_family = "", base_line_size = 1)
+richness_plot
+ggsave("richness_plot.svg",plot = richness_plot,dpi = 600, scale =1.5 )
+```
+```{r}
+#A NIVEL DE CLASE NO HAY NINGÚN PROBLEMA PORQUE LA CANTIDAD DE CLASES SIGUEN SIENDO VISUALIZABLES:
+plot_bar(percentages, fill="Phylum")
+#PARA AGRUPAR LOS MENOS ABUNDANTES Y HACERLOS VISUALIZABLES, SE UTILIZA LA HERRAMIENTA TAX_GLOM:
+tax_glom(percentages, "Phylum") %>% plot_bar( fill="Phylum")
+###PARA DARLES COLOR A LAS BARRAS, SE ESCOGE EL NÚMERO DE COLORES PARA RELLENAR Y EL PROGRAMA REALIZA UNA SELECCIÓN ALEATORIA CUANDO ADICIONAS LA PALETA A LA FUNCIÓN. EJEMP.:
+tax_glom(percentages, "Phylum") %>% plot_bar( fill="Phylum")+scale_fill_manual(values=phylum_colors_abs)
+#ORDENAR POR GRUPOS:
+phylum_abundance <- tax_glom(percentages, "Phylum") %>% plot_bar( fill="Phylum")+scale_fill_manual(values=phylum_colors_abs)+facet_grid(.~Group,scales="free", space="free")+theme_light(base_size = 12, base_family = "", base_line_size = 1)+theme(axis.text.x = element_text(angle = 90))
+phylum_abundance
+ggsave("phylum_abundance.svg",plot = phylum_abundance,dpi = 600, scale =1.5 )
+```
+
+
+```{r donut}
+#percentages@otu_table
+#percentages@otu_table@.Data
+#print(otu_sumas)
+# Aggregate the abundance data at the phylum level
+abundancia_en_filum <- tax_glom(percentages, taxrank = "Phylum")
+
+# Convert abundance data to a data frame
+abundancia_df <- as(otu_table(abundancia_en_filum), "matrix")
+
+# Sum the relative abundances for each phylum across several samples
+tax_table(abundancia_en_filum)[, "Phylum"]
+typeof(tax_table(abundancia_en_filum)[, "Phylum"])
+# Extract phylum names from the tax_table
+phylum_names <- tax_table(abundancia_en_filum)[, "Phylum"]
+
+# Sum the relative abundances for each phylum across several samples
+phylum_sums <- rowSums(abundancia_df)
+
+# Rename the elements with phylum names
+names(phylum_sums) <- phylum_names
+
+# Print the summed relative abundances at the phylum level with phylum names as row names
+print(phylum_sums)
+# Rename the rows with phylum names
+#rownames(phylum_sums) <- phylum_names
+
+# Print the summed relative abundances at the phylum level with phylum names as row names
+#print(phylum_sums)
+#GRAFICAR:
+phylum_abundance
+
+absolute_df <- psmelt(abundancia_en_filum)
+str(absolute_df)
+summarized_data <- absolute_df %>% group_by(Group, OTU,Phylum) %>% summarise(Total_Abundance = sum(Abundance))
+
+library(ggtricks)
+
+phylum_donut <- ggplot(summarized_data, aes(x = "Phylum", y = Total_Abundance, fill = Phylum)) + scale_fill_manual(values=phylum_colors_abs) + geom_bar(stat = "identity") + coord_polar("y", start = 0) + theme_void() + labs(fill = "Categorías") + facet_wrap(~Group)
+
+donut_chart <- phylum_donut + annotate("text", x = 0, y = 0, label = " ", color = "white", size = 10)
+
+donut_chart
+
+ggsave("phylum_donut_chart.svg",plot = donut_chart,dpi = 600, scale =1.5 )
+
+```
+
+CALCULAR ÍNDICES DE DIVERSIDAD:
+
+```{r message=FALSE, warning=FALSE}
+alfa_div <- estimate_richness(physeq_filtered)
+```
+
+CÁLCULO DE DIVERSIDAD BETA (CON LAS DISTANCIAS WEIGHTED UNIFRAC):
+
+```{r message=FALSE, warning=FALSE}
+WUord <- ordinate(percentages, "PCoA", "wunifrac")
+###UNWEIGHTED:
+UUord <- ordinate(percentages, "PCoA", "uunifrac")
+```
+
+GRÁFICO DE PCOA (WEIGHTED):
+
+```{r message=FALSE, warning=FALSE}
+plot_ordination(percentages, WUord, shape="housing", col="injury")+geom_label(aes(label=Group))
+#UNWEIGHTED:
+plot_ordination(percentages, UUord, shape="housing", col="injury")+geom_label(aes(label=Group))
+#Con color y tema, hice un diseño de gráfica como el que sigue:
+plot_ordination(percentages, UUord, shape="housing", col="injury")+geom_point(size=6)+scale_color_manual(values = c("blue", "red"))+theme(text = element_text(family = "Arial", size = 12))+theme_light(base_size = 12, base_family = "", base_line_size = 1)
+```
+
+EDITAR LOS NOMBRES DE LAS FILAS A COLUMNAS PARA PODER UNIR LOS METADATOS:
+
+```{r message=FALSE, warning=FALSE}
+alfa_div <- rownames_to_column(alfa_div, "ID") %>% mutate(ID=gsub("\\.","-",ID))
+#LEER METADATOS:
+metadata <- read_tsv("metadata.txt")
+#CAMBIAR NOMBRES DE LAS MUESTRAS A ID (IGUAL QUE EN EL OTRO ARCHIVO):
+colnames(metadata)[1] <- "ID"
+#UNIR LOS METADATOS CON LA DIVERSIDAD ALFA (PARA PRUEBAS POSTERIORES):
+alfa_div <- left_join(alfa_div, metadata, by="ID")
+head(alfa_div)
+```
+
+COMPARACIONES MÚLTIPLES NO-PARAMÉTRICAS DE DIVERSIDAD ALFA (COMPARE MEANS, WILCOXON TEST):
+
+```{r message=FALSE, warning=FALSE}
+library(ggpubr)
+shannon_comparisons <- compare_means(Shannon~Group,alfa_div)
+simpson_comparisons <- compare_means(Simpson~Group,alfa_div)
+compare_means(Observed~Group,alfa_div)
+```
+
+GRÁFICA NMDS DE DISTANCIA DE BRAY-CURTIS:
+
+```{r}
+meta_ord <- ordinate(physeq=percentages, method = "NMDS", distance = "bray")
+beta_diversity <- plot_ordination(physeq = percentages, ordination = meta_ord, color = "Group") + geom_point(aes(shape = injury), size = 7, color = "black") + geom_point(aes(shape = injury), size = 6) + scale_color_manual(values = mis_colores_alpha) + scale_shape_manual(values = c(16, 15)) + theme(text = element_text(family = "Arial", size = 12)) + theme_light(base_size = 12, base_family = "", base_line_size = 1)
+#Si se requieren las etiquetas de los grupos, usar:
+#beta_diversity <- plot_ordination(physeq = percentages, ordination = meta_ord, color = "Group") + geom_text(aes(label = Group), vjust = 1.5, hjust = 0.5, size = 3, nudge_y = -0.025) + geom_point(aes(shape = injury), size = 7, color = "black") + geom_point(aes(shape = injury), size = 6) + scale_color_manual(values = mis_colores_alpha) + scale_shape_manual(values = c(16, 15)) + theme(text = element_text(family = "Arial", size = 12)) + theme_light(base_size = 12, base_family = "", base_line_size = 1)
+beta_diversity
+ggsave("beta_diversity.svg",plot = beta_diversity,dpi = 600, scale =1.5 )
+```
+
+CALCULAR DISTANCIAS UNIFRAC PARA HACER PERMANOVAS (UNWEIGHTED Y WEIGHTED):
+
+```{r message=FALSE, warning=FALSE}
+UUdist <- distance(percentages, "uunifrac")
+WUdist <- distance(percentages, "wunifrac")
+bray_curtis <- distance(percentages, "bray")
+
+```
+
+REALIZAR PERMANOVA MEDIANTE LA PRUEBA DE ADONIS USANDO INJURY, HOUSING Y COHABITATION COMO FACTORES:
+
+```{r message=FALSE, warning=FALSE}
+adonis2(UUdist ~ injury, data=data.frame(sample_data(percentages)))
+adonis2(bray_curtis ~ injury, data = data.frame(sample_data(percentages)))
+adonis2(bray_curtis ~ housing, data = data.frame(sample_data(percentages)))
+```
+
+ADONIS PAREADO: PARA NO TENER QUE CREAR SUBSET DE DATOS (POR PARES, COMO EL ANTERIOR TBI VS SHAM STD), ESTÁ LA FUNCIÓN:
+
+```{r message=TRUE, warning=TRUE}
+pwise.adonis.physeq <- function(x,factors,dist.m="bray", perm=999,p.adjust.m ='bonferroni'){
+co <- combn(unique(as.character(sample_data(x)[,factors][[1]])),2)
+pairs <- c()
+F.Model <- c()
+R2 <- c()
+p.value <- c()
+for (elem in 1:ncol(co)){ 
+cosa<-c(co[1,elem],co[2,elem])
+filtered<-prune_samples(sample_names(x)[which( sample_data(x)[,factors][[1]] %in% cosa)],x)
+filtered<- filter_taxa(filtered, function(x) sum(x) > 0, TRUE)
+x1=distance(filtered,dist.m)
+form<-paste("x1","~",factors)
+ad = adonis(as.formula(form),as(sample_data(filtered),"data.frame"),perm=perm);
+#print(cosa)
+pairs = c(pairs,paste(co[1,elem],'vs',co[2,elem]));
+F.Model =c(F.Model,ad$aov.tab[1,4]);
+R2 = c(R2,ad$aov.tab[1,5]);
+p.value = c(p.value,ad$aov.tab[1,6])
+}
+p.adjusted = p.adjust(p.value,method=p.adjust.m)
+sig = c(rep('',length(p.adjusted)))
+sig[p.adjusted <= 0.05] <-'.'
+sig[p.adjusted <= 0.01] <-'*'
+sig[p.adjusted <= 0.001] <-'**'
+sig[p.adjusted <= 0.0001] <-'***'
+pairw.res = data.frame(pairs,F.Model,R2,p.value,p.adjusted,sig)
+print("Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1")
+return(pairw.res)
+}
+```
+
+EJEMPLO DE ADONIS PAREADO COMPARANDO ENTRE GRUPOS:
+
+```{r message=FALSE, warning=FALSE}
+###BRAY-CURTIS DISTANCE:
+bray_curtis_comparisons <- pwise.adonis.physeq(percentages, "Group", dist.m="bray", 999, "BH")
+```
+
+GUARDAR EN UN OBJETO EL RESULTADO DE LA PERMANOVA (EJEMP.):
+
+```{r message=FALSE, warning=FALSE}
+permanova_res <- pwise.adonis.physeq(percentages, "Group", dist.m="uunifrac", 999, "BH")
+###EN UN TSV:
+write_tsv(permanova_res,file="permanova_pareado.tsv")
+saveRDS(pwise.adonis.physeq,file="permanova.rds")
+```
+
+GRAFICAR EN DISTINTOS NIVELES DE ORGANIZACIÓN:
+
+```{r message=FALSE, warning=FALSE}
+#A NIVEL DE CLASE NO HAY NINGÚN PROBLEMA PORQUE LA CANTIDAD DE CLASES SIGUEN SIENDO VISUALIZABLES:
+plot_bar(percentages, fill="Class")
+#PARA AGRUPAR LOS MENOS ABUNDANTES Y HACERLOS VISUALIZABLES, SE UTILIZA LA HERRAMIENTA TAX_GLOM:
+tax_glom(percentages, "Class") %>% plot_bar( fill="Class")
+###PARA DARLES COLOR A LAS BARRAS, SE ESCOGE EL NÚMERO DE COLORES PARA RELLENAR Y EL PROGRAMA REALIZA UNA SELECCIÓN ALEATORIA CUANDO ADICIONAS LA PALETA A LA FUNCIÓN. EJEMP.:
+paleta <- sample(colors(), 50)
+tax_glom(percentages, "Class") %>% plot_bar( fill="Class")+scale_fill_manual(values=paleta)
+#ORDENAR POR GRUPOS:
+tax_glom(percentages, "Class") %>% plot_bar(fill="Class") + scale_fill_manual(values=paleta) + facet_grid(.~Group,scales="free", space="free")
+```
+
+AGLOMERAR/FILTRAR/RENOMBRAR LOS POCO ABUNDANTES:
+
+```{r message=FALSE, warning=FALSE}
+glom_others <- function(physeq, nivel, percent=5){
+###AGLOMERAR ASVS A NIVEL TAXONÓMICO:
+nombre <- tax_glom(physeq, taxrank=nivel,NArm = "FALSE")
+###(El "NArm" sirve para que la función taxglom no desestime aquellos taxones que no fueron clasificados de forma más específica [los N/A])
+###FILTRAR LOS ASVS QUE TIENEN MÁXIMO DE ABUNDANCIA < X%:
+cosa<-filter_taxa(nombre,function(x) max(x) < percent,TRUE)
+###AGLOMERANDO LOS POCO ABUNDANTES:
+nombre<-merge_taxa(nombre,taxa_names(cosa))
+###RENOMBRAR LOS POCO ABUNDANTES:
+tax_table(nombre)[is.na(tax_table(nombre))]<-"Others < 5%"
+return(nombre)
+}
+```
+
+APLICAR LA FUNCIÓN A GÉNERO (U OTRO NIVEL):
+
+```{r message=FALSE, warning=FALSE}
+#Class (<1%):
+class_colors_abs <- paletteer_d("ggsci::default_igv")
+class_abundance <- plot_bar(glom_others(percentages,"Class"), fill="Class") + scale_fill_manual(values = class_colors_abs) + facet_grid(.~Group,scales="free", space="free") + theme_light(base_size = 12, base_family = "", base_line_size = 1) + theme(axis.text.x = element_text(angle = 90))
+class_abundance
+ggsave("class_abundance.svg",plot = class_abundance,dpi = 600, scale =1.5 )
+#Order (<2%):
+order_colors_abs <- paletteer_d("ggsci::default_igv")
+order_abundance <- plot_bar(glom_others(percentages,"Order"), fill="Order") + scale_fill_manual(values = order_colors_abs) + facet_grid(.~Group,scales="free", space="free") + theme_light(base_size = 12, base_family = "", base_line_size = 1) + theme(axis.text.x = element_text(angle = 90))
+order_abundance
+ggsave("order_abundance.svg",plot = order_abundance,dpi = 600, scale =1.5 )
+#Family (<3%):
+family_colors_abs <- paletteer_d("ggsci::default_igv")
+family_abundance <- plot_bar(glom_others(percentages,"Family"), fill="Family") + scale_fill_manual(values = family_colors_abs) + facet_grid(. ~ Group, scales = "free", space = "free")+theme_light(base_size = 12, base_family = "", base_line_size = 1)+theme(axis.text.x = element_text(hjust = 1, size = 14, face = "plain"),axis.text.y = element_text(size = 14, face = "bold"),axis.title.x = element_text(size = 16, face = "bold"),axis.title.y = element_text(size = 16, face = "bold"),strip.text = element_text(size = 16, face = "bold", color = "white"),legend.text = element_text(size = 14, face = "plain"),legend.title = element_text(size = 16, face = "plain"))+labs(x = "Sample", y = "Abundance")
+family_abundance
+ggsave("family_abundance.svg",plot = family_abundance,dpi = 600, scale = 1.5, width = 10, height = 8, units = "in")
+#Genus(<5%)
+genus_colors_abs <- paletteer_d("ggsci::default_igv")
+genus_abundance <- plot_bar(glom_others(percentages, "Genus"), fill = "Genus")+scale_fill_manual(values = genus_colors_abs)+facet_grid(. ~ Group, scales = "free", space = "free")+theme_light(base_size = 14, base_family = "", base_line_size = 1)+theme(axis.text.x = element_text(hjust = 1, size = 14, face = "plain"),axis.text.y = element_text(size = 14, face = "bold"),axis.title.x = element_text(size = 16, face = "bold"),axis.title.y = element_text(size = 16, face = "bold"),strip.text = element_text(size = 16, face = "bold", color = "white"),legend.text = element_text(size = 14, face = "italic"),legend.title = element_text(size = 16, face = "plain"))+labs(x = "Sample", y = "Abundance")
+genus_abundance
+ggsave("genus_abundance.svg", plot = genus_abundance, dpi = 600, scale = 1.5, width = 10, height = 8, units = "in")
+#Species(<5%)
+species_colors_abs <- paletteer_d("ggsci::default_igv")
+species_abundance <- plot_bar(glom_others(percentages,"Species"), fill="Species") + scale_fill_manual(values = species_colors_abs) + facet_grid(.~Group,scales="free", space="free") + theme_light(base_size = 12, base_family = "", base_line_size = 1) + theme(axis.text.x = element_text(angle = 90))
+species_abundance
+ggsave("species_abundance.svg",plot = species_abundance,dpi = 600, scale =1.5 )
+```
+
+MICROBIOME MARKER PARA REALIZAR ANÁLISIS DE ABUNDANCIA DIFERENCIAL CON LEFSE:
+
+```{r message=FALSE, warning=FALSE}
+library(microbiomeMarker)
+###CREAR UN NUEVO OBJETO:
+datos2lefse <- percentages
+###CAMBIAR LA COLUMNA "DOMAIN" A "KINGDOM":
+colnames(tax_table(datos2lefse))[1] <- "Kingdom"
+###CORRER LEFSE:
+lefse_groups <- run_lefse(datos2lefse,"Group", taxa_rank="Genus")
+###COMPARACIONES UNA CONTRA UNO:
+lefse_multiple <- run_lefse(datos2lefse,"Group", taxa_rank="Genus", multigrp_strat = TRUE)
+###FUNCIÓN: COMPARAR CONTRA TODOS:
+pwise.run_lefse <- function(x,factors){
+co <- combn(unique(as.character(sample_data(x)[,factors][[1]])),2)
+res<-list()
+
+
+for (elem in 1:ncol(co)){ 
+cosa<-c(co[1,elem],co[2,elem])
+pairs = paste(co[1,elem],'vs',co[2,elem])
+filtered<-prune_samples(sample_names(x)[which( sample_data(x)[,factors][[1]] %in% cosa)],x)
+filtered<- filter_taxa(filtered, function(x) sum(x) > 0, TRUE)
+
+tem <- run_lefse(filtered, factors, taxa_rank = "Genus")
+
+res[[pairs]] <- tem
+
+}
+
+return(res)
+
+}
+```
+
+
+```{r message=FALSE, warning=FALSE}
+###GRAFICAR TODOS:
+# Definir los colores personalizados
+mis_colores <- c("beige", "darkgreen", "darkred", "navy")
+# Graficar el diagrama de barras y aplicar los colores personalizados
+enriched_abundance <- plot_ef_bar(lefse_groups) + theme(axis.text.y = element_text(face = "italic")) +theme_light(base_size = 12, base_family = "", base_line_size = 1) + scale_fill_manual(values = mis_colores) + geom_col(colour = "black", size = 0.5)
+enriched_abundance
+ggsave("enriched_abundance.svg",plot = enriched_abundance,dpi = 600, scale =1.5 )
+###GRAFICAR COMPARACIÓN ENTRE GRUPOS. CON EL NÚMERO SE INDICA EL NOMBRE DE LA COMPARACIÓN:
+###CREAR OBJETO Y APLICAR FUNCIÓN:
+res_lefse_pareado <- pwise.run_lefse(datos2lefse, "Group")
+###GRAFICAR (EJEMPLO, SHAM+STD VS TBI+STD):
+colores_lefse_pareado <- c("beige","darkred")
+lefse_tbi_sham <- plot_ef_bar(res_lefse_pareado[[2]])+ theme(axis.text.y = element_text(face = "italic")) +theme_light(base_size = 12, base_family = "", base_line_size = 1) + scale_fill_manual(values = colores_lefse_pareado) + geom_col(colour = "black", size = 0.5)
+lefse_tbi_sham
+ggsave("lefse_tbi_sham.svg",plot = lefse_tbi_sham,dpi = 600, scale =1.5 )
+```
+
+Picrust: Predicción de rutas metabólicas.
+
+```{r}
+###Cargar la librería de Tidyverse:
+library(tidyverse)
+###Abrir el archivo tsv (descompreso):
+picrust <- read_tsv("path_abun_unstrat_descrip.tsv")
+###Mostrar las columnas para renombrarlas:
+colnames(picrust)
+###Son 30 muestras, pero las primeras 2 columnas no lo son:
+pathAbundance <- picrust[,3:32]
+###Agregar nombres a las filas mediante un data frame:
+pathAbundance <- data.frame(pathAbundance)
+rownames(pathAbundance) <- picrust$pathway
+pathAbundance
+head(pathAbundance)
+library(phyloseq)
+pathAbundance <- otu_table(pathAbundance, taxa_are_rows=TRUE)
+pathTax <- picrust[,2]
+pathTax <- data.frame(pathTax)
+rownames(pathTax) <- picrust$pathway
+###Sólo se puede leer este archivo si se indica que es una matriz (as.matrix):
+pathTax <- tax_table(as.matrix(pathTax))
+###Unir:
+picrust_physeq <- merge_phyloseq(pathAbundance, pathTax)
+###Crear el objeto con las tres bases:
+picrust_physeq <- merge_phyloseq(picrust_physeq, import_qiime_sample_data("metadata_picrust.txt"))
+###Hacer subset de grupos de interés (ejemplo):
+picrust_tbi_ee <- subset_samples(picrust_physeq, Group == "TBI_STD"| Group == "TBI_EE_SIN_COH")
+###Función: Generar archivo para exportar a Galaxy:
+phyloseq2lefseGenus <- function (ps, covars, file.name = "lefse_data.txt", taxa.levels = c("Kingdom", 
+    "Phylum", "Class", "Order", "Family", "Genus"), transpose.otus = TRUE) 
+{
+    if (length(covars) > 2) {
+        warning("The length of the `covars` vector is greater than 2. File must be edited manually for use in LEfSe, which throws and error when there are more rows than specific classes, subclasses, and subjects.")
+    }
+    smpl.data <- sample.data.frame(ps)
+    smpl.data$Sample <- row.names(smpl.data)
+    t.smpl.data <- t(smpl.data)
+    t.smpl.data <- as.data.frame(t.smpl.data[c("Sample", covars), 
+        ])
+    if (transpose.otus) {
+        otu.tbl <- t(otu.matrix(ps))
+    }
+    else {
+        otu.tbl <- otu.matrix(ps)
+    }
+    tax.tbl <- taxa.matrix(ps)
+    tax.tbl <- as.matrix(tax.tbl[, taxa.levels])
+    uniq.lvls <- c()
+    for (i in c(1:length(tax.tbl[1, ]))) {
+        lvls <- as.data.frame(do.call(paste, c(as.data.frame(tax.tbl[, 
+            1:i]), sep = "|")))
+        names(lvls) <- "tax.lvl"
+        uniq.i <- as.character(unique(lvls$tax.lvl))
+        uniq.lvls <- c(uniq.lvls, uniq.i)
+    }
+    tax.tbl.join <- as.data.frame(do.call(paste, c(as.data.frame(tax.tbl), 
+        sep = "|")))
+    row.names(tax.tbl.join) <- row.names(tax.tbl)
+    names(tax.tbl.join) <- "tax.lvl"
+    uniq.tax.lvl.abunds <- data.frame(row.names = uniq.lvls)
+    for (smpl in names(t.smpl.data)) {
+        abunds <- as.data.frame(otu.tbl[row.names(otu.tbl), smpl])
+        total.abund <- sum(abunds[, 1])
+        smpl.tax.lvl.abunds <- cbind(abunds, tax.tbl.join)
+        smpl.uniq.lvl.abunds <- data.frame()
+        for (uniq.lvl in uniq.lvls) {
+            uniq.sub <- subset(smpl.tax.lvl.abunds, grepl(uniq.lvl, 
+                smpl.tax.lvl.abunds$tax.lvl, fixed = TRUE))
+            lvl.total <- as.factor(sum(uniq.sub[, 1])/total.abund)
+            uniq.lvl.smpl <- data.frame(row.names = uniq.lvl, 
+                sample = lvl.total)
+            names(uniq.lvl.smpl) <- smpl
+            smpl.uniq.lvl.abunds <- rbind(smpl.uniq.lvl.abunds, 
+                uniq.lvl.smpl)
+        }
+        uniq.tax.lvl.abunds <- cbind(uniq.tax.lvl.abunds, smpl.uniq.lvl.abunds)
+    }
+    final.data <- rbind(t.smpl.data, uniq.tax.lvl.abunds)
+    write.table(final.data, file = file.name, col.names = FALSE, 
+        sep = "\t", quote = FALSE)
+}
+```
+
+Agrupar en 7 columnas (por cada nivel taxonómico) y eliminar la columna "-description".
+
+```{r}
+###Crear las columnas haciéndolo "data_frame"
+###archivo$nombre (hacerlo 7 veces: Kingdom, Phylum, Order, Class, Family, Order, Species)
+```
+
+
+El doctor me envió el objeto ya arreglado, por lo que sólo es cuestión de integrarlo:
+
+```{r}
+###Leer el archivo recibido y guardarlo en un objeto que pueda usar:
+
+picrust7ranks <- readRDS("picrust7ranks.rsd")
+
+```
+
+Crear subsets de datos para hacer análisis pareados:
+
+```{r}
+###Ejemplo: Comparar TBI+STD vs TBI+EE Sin cohabitación:
+
+picrust7_tbi_ee <- subset_samples(picrust7ranks, Group == "TBI_STD" | Group == "TBI_EE_SIN_COH")
+
+###Correr las pruebas (lefse, aldex... ):
+
+lefse_tbi_ee <- run_lefse(picrust7_tbi_ee, "Group", taxa_rank = "Genus")
+
+###Graficar:
+
+plot_ef_bar(lefse_tbi_ee)
+
+###Hacer lo mismo con las demás comparaciones.
+###Para editar gráficas, abrir GGplot:
+
+library(ggplot2)
+
+###usar funciones de GGPlot:
+### ... + scale_fill_manual(values=NOMBRE_DE_LA_PALETA)+facet_wrap(.~Group, ###scale="free")+theme (seleccionar uno).
+###(... +scale_fill_manual(values=c("green","red"))
+###Ejemplo:
+
+picrust_tbi_ee <- plot_ef_bar(lefse_tbi_ee) + theme(axis.text.y = element_text(face = "italic",family = "arial")) + theme_light(base_size = 12, base_family = "", base_line_size = 1) + scale_fill_manual(values = colores_lefse_pareado) + geom_col(colour = "black", size = 0.5)
+picrust_tbi_ee
+ggsave("picrust_tbi_ee.svg",plot = picrust_tbi_ee,dpi = 600, scale =1.5 )
+```
+
+Exportar otu table y tax table con tax glom:
+
+```{r}
+#glom_genus <- tax_glom(datos_sin_euc, taxrank = "Genus")
+view(datos_sin_euc@tax_table@.Data)
+View(glom_genus@tax_table@.Data)
+df_genus_absolute <- psmelt(glom_genus)
+```
+
+```{r}
+#glom_phylum <- tax_glom(datos_sin_euc, taxrank = "Phylum")
+#view(datos_sin_euc@tax_table@.Data)
+#View(glom_phylum@otu_table@.Data)
+#df_phylum_absolute <- psmelt(glom_phylum)
+#Para guardar en archivo para excel:
+#write.csv(df_phylum_absolute, "tax_table_phylum.csv", row.names = FALSE)
+#glom_species <- tax_glom(datos_sin_euc, taxrank = "Species")
+#view(datos_sin_euc@tax_table@.Data)
+#View(glom_species@otu_table@.Data)
+#df_species_absolute <- psmelt(glom_species)
+#Para guardar en archivo para excel:
+#write.csv(df_species_absolute, "tax_table_species.csv", row.names = FALSE)
+#Clase
+#glom_class <- tax_glom(datos_sin_euc, taxrank = "Class")
+#View(glom_class@otu_table@.Data)
+#df_class_absolute <- psmelt(glom_class)
+#write.csv(df_class_absolute, "tax_table_class.csv", row.names = FALSE)
+#Orden
+#glom_order <- tax_glom(datos_sin_euc, taxrank = "Order")
+#View(glom_order@otu_table@.Data)
+#df_order_absolute <- psmelt(glom_order)
+#write.csv(df_order_absolute, "tax_table_order.csv", row.names = FALSE)
+#Familia
+#glom_family <- tax_glom(datos_sin_euc, taxrank = "Family")
+#View(glom_family@otu_table@.Data)
+#df_family_absolute <- psmelt(glom_family)
+#write.csv(df_family_absolute, "tax_table_family.csv", row.names = FALSE)
+```
+PARA AGRUPAR TODAS LAS GRÁFICAS Y GUARDARLAS EN UNA SOLA:
+
+```{r}
+#HAY QUE MEJORAR ESTE CÓDIGO. LAS GRÁFICAS SALEN ENCIMADAS:
+# Cargar el paquete gridExtra
+#library(gridExtra)
+#Combina las gráficas en una sola
+#combined_plot <- grid.arrange(richness_plot, beta_diversity, genus_abundance, lefse_tbi_sham, ncol = 2)
+#Visualizar la combinación de gráficas
+#print(combined_plot)
+#Guardar la combinación de gráficas como un objeto independiente
+#ggsave("combined_plot.svg", combined_plot)
+
+```
