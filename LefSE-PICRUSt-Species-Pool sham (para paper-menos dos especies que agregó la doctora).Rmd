@@ -1,0 +1,190 @@
+---
+title: "Análisis de amplicones-LEfSe y PICRUSt. POOL DE SHAM VS TBI+STD"
+author: "Jonny Zamudio"
+date: "2024-01-25"
+output: html_document
+---
+Análisis de diversidad
+
+
+Librerías necesarias
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r cars }
+library(phyloseq)
+library(tidyverse)
+library(vegan)
+```
+Importar datos
+
+```{r pressure, echo=TRUE, message=FALSE, warning=FALSE}
+datos <- import_biom("new_otu_table.biom","tree.nwk")
+colnames(tax_table(datos)) <- c("Domain", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+datos_sin_euc <- subset_taxa(datos, Family != "Mitochondria")
+sample_names(datos_sin_euc)
+nuevos_nombres <- substr(sample_names(datos_sin_euc), 5,10)
+sample_names(datos_sin_euc) <- nuevos_nombres
+sample_names(datos_sin_euc)
+datos_sin_euc_2 <- merge_phyloseq(datos_sin_euc, import_qiime_sample_data("metadata.txt"))
+# Let's say you want to drop samples "Sample1" and "Sample2"
+samples_to_drop <- c("P-0019", "P-0020", "P-0021", "P-0022", "P-0023", "P-0024", "P-0025", "P-0026", "P-0027", "P-0028", "P-0029", "P-0030")
+# Drop the selected samples from the phyloseq object
+physeq_filtered <- subset_samples(datos_sin_euc_2, !X.SampleID %in% samples_to_drop)
+physeq_filtered
+sample_data(physeq_filtered)[["Group"]] <- factor(sample_data(physeq_filtered)[["Group"]], levels=c("SHAM_STD","SHAM_EE","TBI_STD"))
+percentages_3 <- transform_sample_counts(physeq_filtered, function(x) x*100 / sum(x))
+sample_sums(percentages_3)
+datos2lefse_3 <- percentages_3
+###CAMBIAR LA COLUMNA "DOMAIN" A "KINGDOM":
+colnames(tax_table(datos2lefse_3))[1] <- "Kingdom"
+```
+
+
+```{r message=FALSE, warning=FALSE}
+library(microbiomeMarker)
+###CAMBIAR LA COLUMNA "DOMAIN" A "KINGDOM":
+colnames(tax_table(datos2lefse_3))[1] <- "Kingdom"
+```
+
+
+```{r pressure, echo=TRUE, message=FALSE, warning=FALSE}
+###CORRER LEFSE:
+lefse_groups_pool_species <- run_lefse(datos2lefse_3,"injury", taxa_rank="Species")
+###COMPARACIONES UNA CONTRA UNO:
+lefse_multiple_pool_species <- run_lefse(datos2lefse_3,"injury", taxa_rank="Species", multigrp_strat = TRUE)
+```
+
+
+```{r message=FALSE, warning=FALSE}
+###GRAFICAR (SHAM+STD VS TBI+STD) A NIVEL DE Species:
+colores_lefse_pareado <- c("beige","darkred")
+lefse_tbi_pool_species <- plot_ef_bar(lefse_multiple_pool_species)+ theme(axis.text.y = element_text(face = "italic")) +theme_light(base_size = 12, base_family = "", base_line_size = 1) + scale_fill_manual(values = colores_lefse_pareado) + geom_col(colour = "black", size = 0.5)
+lefse_tbi_pool_species
+ggsave("lefse_tbi_pool_species.svg",plot = lefse_tbi_pool_species,dpi = 600, scale =1.5 )
+view(lefse_multiple_pool_species@marker_table)
+
+```
+Picrust: Predicción de rutas metabólicas.
+
+```{r}
+###Cargar la librería de Tidyverse:
+library(tidyverse)
+###Abrir el archivo tsv (descompreso):
+picrust <- read_tsv("path_abun_unstrat_descrip.tsv")
+###Mostrar las columnas para renombrarlas:
+colnames(picrust)
+###Son 30 muestras, pero las primeras 2 columnas no lo son:
+pathAbundance <- picrust[,3:32]
+###Agregar nombres a las filas mediante un data frame:
+pathAbundance <- data.frame(pathAbundance)
+rownames(pathAbundance) <- picrust$pathway
+pathAbundance
+head(pathAbundance)
+library(phyloseq)
+pathAbundance <- otu_table(pathAbundance, taxa_are_rows=TRUE)
+pathTax <- picrust[,2]
+pathTax <- data.frame(pathTax)
+rownames(pathTax) <- picrust$pathway
+###Sólo se puede leer este archivo si se indica que es una matriz (as.matrix):
+pathTax <- tax_table(as.matrix(pathTax))
+###Unir:
+picrust_physeq <- merge_phyloseq(pathAbundance, pathTax)
+###Crear el objeto con las tres bases:
+picrust_physeq <- merge_phyloseq(picrust_physeq, import_qiime_sample_data("metadata_picrust.txt"))
+```
+
+FUNCIÓN PICRUSt:
+
+```{r}
+###Función: Generar archivo para exportar a Galaxy:
+phyloseq2lefseGenus <- function (ps, covars, file.name = "lefse_data.txt", taxa.levels = c("Kingdom", 
+    "Phylum", "Class", "Order", "Family", "Genus"), transpose.otus = TRUE) 
+{
+    if (length(covars) > 2) {
+        warning("The length of the `covars` vector is greater than 2. File must be edited manually for use in LEfSe, which throws and error when there are more rows than specific classes, subclasses, and subjects.")
+    }
+    smpl.data <- sample.data.frame(ps)
+    smpl.data$Sample <- row.names(smpl.data)
+    t.smpl.data <- t(smpl.data)
+    t.smpl.data <- as.data.frame(t.smpl.data[c("Sample", covars), 
+        ])
+    if (transpose.otus) {
+        otu.tbl <- t(otu.matrix(ps))
+    }
+    else {
+        otu.tbl <- otu.matrix(ps)
+    }
+    tax.tbl <- taxa.matrix(ps)
+    tax.tbl <- as.matrix(tax.tbl[, taxa.levels])
+    uniq.lvls <- c()
+    for (i in c(1:length(tax.tbl[1, ]))) {
+        lvls <- as.data.frame(do.call(paste, c(as.data.frame(tax.tbl[, 
+            1:i]), sep = "|")))
+        names(lvls) <- "tax.lvl"
+        uniq.i <- as.character(unique(lvls$tax.lvl))
+        uniq.lvls <- c(uniq.lvls, uniq.i)
+    }
+    tax.tbl.join <- as.data.frame(do.call(paste, c(as.data.frame(tax.tbl), 
+        sep = "|")))
+    row.names(tax.tbl.join) <- row.names(tax.tbl)
+    names(tax.tbl.join) <- "tax.lvl"
+    uniq.tax.lvl.abunds <- data.frame(row.names = uniq.lvls)
+    for (smpl in names(t.smpl.data)) {
+        abunds <- as.data.frame(otu.tbl[row.names(otu.tbl), smpl])
+        total.abund <- sum(abunds[, 1])
+        smpl.tax.lvl.abunds <- cbind(abunds, tax.tbl.join)
+        smpl.uniq.lvl.abunds <- data.frame()
+        for (uniq.lvl in uniq.lvls) {
+            uniq.sub <- subset(smpl.tax.lvl.abunds, grepl(uniq.lvl, 
+                smpl.tax.lvl.abunds$tax.lvl, fixed = TRUE))
+            lvl.total <- as.factor(sum(uniq.sub[, 1])/total.abund)
+            uniq.lvl.smpl <- data.frame(row.names = uniq.lvl, 
+                sample = lvl.total)
+            names(uniq.lvl.smpl) <- smpl
+            smpl.uniq.lvl.abunds <- rbind(smpl.uniq.lvl.abunds, 
+                uniq.lvl.smpl)
+        }
+        uniq.tax.lvl.abunds <- cbind(uniq.tax.lvl.abunds, smpl.uniq.lvl.abunds)
+    }
+    final.data <- rbind(t.smpl.data, uniq.tax.lvl.abunds)
+    write.table(final.data, file = file.name, col.names = FALSE, 
+        sep = "\t", quote = FALSE)
+}
+```
+
+Leer el archivo recibido y guardarlo en un objeto que pueda usar:
+
+```{r}
+picrust7ranks <- readRDS("picrust7ranks.rsd")
+```
+
+Crear subsets de datos para hacer análisis pareados:
+
+```{r}
+###Comparar pool de SHAM vs TBI+STD:
+
+picrust7_sham_tbi_species <- subset_samples(picrust7ranks, Group == "SHAM_STD" | Group == "SHAM_EE" | Group == "TBI_STD")
+
+###Correr las pruebas (lefse, aldex... ):
+
+lefse_sham_tbi_species_p <- run_lefse(picrust7_sham_tbi_species, "injury", taxa_rank = "Species")
+
+###Graficar:
+
+plot_ef_bar(lefse_sham_tbi_species_p)
+
+###Para editar gráficas, abrir GGplot:
+
+library(ggplot2)
+
+###usar funciones de GGPlot:
+### ... + scale_fill_manual(values=NOMBRE_DE_LA_PALETA)+facet_wrap(.~Group, ###scale="free")+theme (seleccionar uno).
+###(... +scale_fill_manual(values=c("green","red"))
+###Ejemplo:
+
+picrust_sham_tbi_species_p <- plot_ef_bar(lefse_sham_tbi_species_p) + theme(axis.text.y = element_text(face = "italic",family = "arial")) + theme_light(base_size = 12, base_family = "", base_line_size = 1) + scale_fill_manual(values = colores_lefse_pareado) + geom_col(colour = "black", size = 0.5)
+picrust_sham_tbi_species_p
+ggsave("picrust_sham_tbi_species_p.svg",plot = picrust_sham_tbi_species_p,dpi = 600, scale =1.5 )
+```
